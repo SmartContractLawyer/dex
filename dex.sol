@@ -92,13 +92,15 @@ contract ImprovedDex {
         return orderBook[_ticker][uint(_side)];
     }
 
-    function createLimitOrder(string memory _ticker, Side _side, uint256 _orderQty, uint256 _orderPrice) public returns(uint256 _filledQty) {
+    function createLimitOrder(string memory _ticker, Side _side, uint256 _orderQty, uint256 _orderPrice) public tokenExist(_ticker) returns(uint256 _filledQty) {
+        require(_orderQty >= 1, "Order quantity must be at least 1.");
+        require(_orderPrice != 0, "Order price cannot be zero.");
         uint256 actuallyFilled = 0;
         Order[] storage buyorders = orderBook[_ticker][uint(0)];
         Order[] storage sellorders = orderBook[_ticker][uint(1)];
         if(_side == Side.BUY){
             require(tokenBalances[msg.sender]["ETH"] >= _orderQty.mul(_orderPrice), "Your ETH balance is insufficient for this buy limit order.");
-            if(sellorders.length == 0){
+            if(sellorders.length == 0 || sellorders[0].price > _orderPrice){
                 buyorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, _orderQty, 0));
                 //bubble sort orders by price, [3, 2, 1]
                 uint256 bsp = buyorders.length > 0 ? buyorders.length.sub(1) : 0;
@@ -116,67 +118,48 @@ contract ImprovedDex {
                 return actuallyFilled;
             }
             else{
-                if(sellorders[0].price <= _orderPrice){
-                    uint256 leftToFill = _orderQty;
-                    uint256 filledByThisTrade = 0;
-                    uint256 costOfThisTrade = 0;
-                    for (uint256 i = 0; i < sellorders.length && actuallyFilled < _orderQty; i++) {
-                        if(sellorders[i].price <= _orderPrice && sellorders[i].amount.sub(sellorders[i].filled) >= leftToFill){
-                            filledByThisTrade = leftToFill;
-                        }
-                        else if(sellorders[i].price <= _orderPrice && sellorders[i].amount.sub(sellorders[i].filled) < leftToFill){ 
-                            filledByThisTrade = sellorders[i].amount.sub(sellorders[i].filled);
-                        }
-                        else{
-                            filledByThisTrade = 0;
-                        }
-                        sellorders[i].filled = sellorders[i].filled.add(filledByThisTrade);
-                        costOfThisTrade = filledByThisTrade.mul(sellorders[i].price);
-                        if(filledByThisTrade == 0){
-                            break;
-                        }
-                        else if(tokenBalances[sellorders[i].trader][_ticker] < filledByThisTrade){
-                                sellorders[i].filled = sellorders[i].amount;
-                        }
-                        else{
-                            require(tokenBalances[msg.sender]["ETH"] >= costOfThisTrade, "You don't have enough ETH for this trade.");
-                            require(sellorders[i].trader != msg.sender, "You currently have sell limit orders in place that would be triggered by this buy limit order.");
-                            tokenBalances[msg.sender][_ticker] = tokenBalances[msg.sender][_ticker].add(filledByThisTrade);
-                            tokenBalances[msg.sender]["ETH"] = tokenBalances[msg.sender]["ETH"].sub(costOfThisTrade);
-                            tokenBalances[sellorders[i].trader][_ticker] = tokenBalances[sellorders[i].trader][_ticker].sub(filledByThisTrade);
-                            tokenBalances[sellorders[i].trader]["ETH"] = tokenBalances[sellorders[i].trader]["ETH"].add(costOfThisTrade);
-                            actuallyFilled = actuallyFilled.add(filledByThisTrade);
-                            leftToFill = leftToFill.sub(filledByThisTrade);
-                            emit tradeCompleted(sellorders[i].id, _ticker, sellorders[i].filled, sellorders[i].price, costOfThisTrade, msg.sender, sellorders[i].trader);
-                        }
+                uint256 leftToFill = _orderQty;
+                uint256 filledByThisTrade = 0;
+                uint256 costOfThisTrade = 0;
+                for (uint256 i = 0; i < sellorders.length && actuallyFilled < _orderQty; i++) {
+                    if(sellorders[i].price <= _orderPrice && sellorders[i].amount.sub(sellorders[i].filled) >= leftToFill){
+                        filledByThisTrade = leftToFill;
                     }
-                    while(sellorders.length > 0 && sellorders[0].filled == sellorders[0].amount){
-                        for (uint256 i = 0; i < sellorders.length.sub(1); i++) {
-                            sellorders[i] = sellorders[i.add(1)];
-                        }
-                        sellorders.pop();
+                    else if(sellorders[i].price <= _orderPrice && sellorders[i].amount.sub(sellorders[i].filled) < leftToFill){ 
+                        filledByThisTrade = sellorders[i].amount.sub(sellorders[i].filled);
                     }
-                    orderBook[_ticker][uint(1)] = sellorders;
-                    if(leftToFill > 0){
-                        buyorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, leftToFill, 0));
-                        //bubble sort orders by price, [3, 2, 1]
-                        uint256 bsp = buyorders.length > 0 ? buyorders.length.sub(1) : 0;
-                        while(bsp > 0){
-                            if(buyorders[bsp.sub(1)].price >= buyorders[bsp].price) {
-                                break;
-                            }
-                            Order memory temp = buyorders[bsp.sub(1)];
-                            buyorders[bsp.sub(1)] = buyorders[bsp];
-                            buyorders[bsp] = temp;
-                            bsp--;
-                        }
-                        orderBook[_ticker][uint(0)] = buyorders;
-                        nextOrderId++;
+                    else{
+                        filledByThisTrade = 0;
                     }
-                    return actuallyFilled;
+                    sellorders[i].filled = sellorders[i].filled.add(filledByThisTrade);
+                    costOfThisTrade = filledByThisTrade.mul(sellorders[i].price);
+                    if(filledByThisTrade == 0){
+                        break;
+                    }
+                    else if(tokenBalances[sellorders[i].trader][_ticker] < filledByThisTrade){
+                            sellorders[i].filled = sellorders[i].amount;
+                    }
+                    else{
+                        require(tokenBalances[msg.sender]["ETH"] >= costOfThisTrade, "You don't have enough ETH for this trade.");
+                        require(sellorders[i].trader != msg.sender, "You currently have sell limit orders in place that would be triggered by this buy limit order.");
+                        tokenBalances[msg.sender][_ticker] = tokenBalances[msg.sender][_ticker].add(filledByThisTrade);
+                        tokenBalances[msg.sender]["ETH"] = tokenBalances[msg.sender]["ETH"].sub(costOfThisTrade);
+                        tokenBalances[sellorders[i].trader][_ticker] = tokenBalances[sellorders[i].trader][_ticker].sub(filledByThisTrade);
+                        tokenBalances[sellorders[i].trader]["ETH"] = tokenBalances[sellorders[i].trader]["ETH"].add(costOfThisTrade);
+                        actuallyFilled = actuallyFilled.add(filledByThisTrade);
+                        leftToFill = leftToFill.sub(filledByThisTrade);
+                        emit tradeCompleted(sellorders[i].id, _ticker, sellorders[i].filled, sellorders[i].price, costOfThisTrade, msg.sender, sellorders[i].trader);
+                    }
                 }
-                else{
-                    buyorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, _orderQty, 0));
+                while(sellorders.length > 0 && sellorders[0].filled == sellorders[0].amount){
+                    for (uint256 i = 0; i < sellorders.length.sub(1); i++) {
+                        sellorders[i] = sellorders[i.add(1)];
+                    }
+                    sellorders.pop();
+                }
+                orderBook[_ticker][uint(1)] = sellorders;
+                if(leftToFill > 0){
+                    buyorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, leftToFill, 0));
                     //bubble sort orders by price, [3, 2, 1]
                     uint256 bsp = buyorders.length > 0 ? buyorders.length.sub(1) : 0;
                     while(bsp > 0){
@@ -190,13 +173,13 @@ contract ImprovedDex {
                     }
                     orderBook[_ticker][uint(0)] = buyorders;
                     nextOrderId++;
-                    return actuallyFilled;
                 }
+                return actuallyFilled;
             }
         }
         else if(_side == Side.SELL){
             require(tokenBalances[msg.sender][_ticker] >= _orderQty, "Your token balance is insufficient for this sell limit order.");
-            if(buyorders.length == 0){
+            if(buyorders.length == 0 || buyorders[0].price < _orderPrice){
                 sellorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, _orderQty, 0));
                 //bubble sort orders by price, [1, 2, 3]
                 uint256 bsp = sellorders.length > 0 ? sellorders.length.sub(1) : 0;
@@ -214,47 +197,46 @@ contract ImprovedDex {
                 return actuallyFilled;
             }
             else{
-                if(buyorders[0].price >= _orderPrice){
-                    uint256 leftToFill = _orderQty;
-                    uint256 filledByThisTrade = 0;
-                    uint256 costOfThisTrade = 0;
-                    for (uint256 i = 0; i < buyorders.length && actuallyFilled < _orderQty; i++) {
-                        if(buyorders[i].price >= _orderPrice && buyorders[i].amount.sub(buyorders[i].filled) >= leftToFill){
-                            filledByThisTrade = leftToFill;
-                        }
-                        else if(buyorders[i].price >= _orderPrice && buyorders[i].amount.sub(buyorders[i].filled) < leftToFill){ 
-                            filledByThisTrade = buyorders[i].amount.sub(buyorders[i].filled);
-                        }
-                        else{
-                            filledByThisTrade = 0;
-                        }
-                        buyorders[i].filled = buyorders[i].filled.add(filledByThisTrade);
-                        costOfThisTrade = filledByThisTrade.mul(buyorders[i].price);
-                        if(filledByThisTrade == 0){
-                            break;
-                        }
-                        else if(tokenBalances[buyorders[i].trader]["ETH"] < costOfThisTrade){
-                            buyorders[i].filled = buyorders[i].amount;
-                        }
-                        else{
-                            require(buyorders[i].trader != msg.sender, "You currently have buy limit orders in place that would be triggered by this sell limit order.");
-                            tokenBalances[msg.sender][_ticker] = tokenBalances[msg.sender][_ticker].sub(filledByThisTrade);
-                            tokenBalances[msg.sender]["ETH"] = tokenBalances[msg.sender]["ETH"].add(costOfThisTrade);
-                            tokenBalances[buyorders[i].trader][_ticker] = tokenBalances[buyorders[i].trader][_ticker].add(filledByThisTrade);
-                            tokenBalances[buyorders[i].trader]["ETH"] = tokenBalances[buyorders[i].trader]["ETH"].sub(costOfThisTrade);
-                            actuallyFilled = actuallyFilled.add(filledByThisTrade);
-                            leftToFill = leftToFill.sub(filledByThisTrade);
-                            emit tradeCompleted(buyorders[i].id, _ticker, buyorders[i].filled, buyorders[i].price, costOfThisTrade, msg.sender, buyorders[i].trader);
-                        }
+                uint256 leftToFill = _orderQty;
+                uint256 filledByThisTrade = 0;
+                uint256 costOfThisTrade = 0;
+                for (uint256 i = 0; i < buyorders.length && actuallyFilled < _orderQty; i++) {
+                    if(buyorders[i].price >= _orderPrice && buyorders[i].amount.sub(buyorders[i].filled) >= leftToFill){
+                        filledByThisTrade = leftToFill;
                     }
-                    while(buyorders.length > 0 && buyorders[0].filled == buyorders[0].amount){
-                        for (uint256 i = 0; i < buyorders.length.sub(1); i++) {
-                            buyorders[i] = buyorders[i.add(1)];
-                        }
-                        buyorders.pop();
+                    else if(buyorders[i].price >= _orderPrice && buyorders[i].amount.sub(buyorders[i].filled) < leftToFill){ 
+                        filledByThisTrade = buyorders[i].amount.sub(buyorders[i].filled);
                     }
-                    orderBook[_ticker][uint(0)] = buyorders;
-                    if(leftToFill > 0){
+                    else{
+                        filledByThisTrade = 0;
+                    }
+                    buyorders[i].filled = buyorders[i].filled.add(filledByThisTrade);
+                    costOfThisTrade = filledByThisTrade.mul(buyorders[i].price);
+                    if(filledByThisTrade == 0){
+                        break;
+                    }
+                    else if(tokenBalances[buyorders[i].trader]["ETH"] < costOfThisTrade){
+                        buyorders[i].filled = buyorders[i].amount;
+                    }
+                    else{
+                        require(buyorders[i].trader != msg.sender, "You currently have buy limit orders in place that would be triggered by this sell limit order.");
+                        tokenBalances[msg.sender][_ticker] = tokenBalances[msg.sender][_ticker].sub(filledByThisTrade);
+                        tokenBalances[msg.sender]["ETH"] = tokenBalances[msg.sender]["ETH"].add(costOfThisTrade);
+                        tokenBalances[buyorders[i].trader][_ticker] = tokenBalances[buyorders[i].trader][_ticker].add(filledByThisTrade);
+                        tokenBalances[buyorders[i].trader]["ETH"] = tokenBalances[buyorders[i].trader]["ETH"].sub(costOfThisTrade);
+                        actuallyFilled = actuallyFilled.add(filledByThisTrade);
+                        leftToFill = leftToFill.sub(filledByThisTrade);
+                        emit tradeCompleted(buyorders[i].id, _ticker, buyorders[i].filled, buyorders[i].price, costOfThisTrade, msg.sender, buyorders[i].trader);
+                    }
+                }
+                while(buyorders.length > 0 && buyorders[0].filled == buyorders[0].amount){
+                    for (uint256 i = 0; i < buyorders.length.sub(1); i++) {
+                        buyorders[i] = buyorders[i.add(1)];
+                    }
+                    buyorders.pop();
+                }
+                orderBook[_ticker][uint(0)] = buyorders;
+                if(leftToFill > 0){
                     sellorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, leftToFill, 0));
                     //bubble sort orders by price, [1, 2, 3]
                     uint256 bsp = sellorders.length > 0 ? sellorders.length.sub(1) : 0;
@@ -269,31 +251,14 @@ contract ImprovedDex {
                     }
                     orderBook[_ticker][uint(0)] = buyorders;
                     nextOrderId++;
-                    }
-                    return actuallyFilled;
                 }
-                else{
-                    sellorders.push(Order(nextOrderId, msg.sender, _side, _ticker, _orderPrice, _orderQty, 0));
-                    //bubble sort orders by price, [1, 2, 3]
-                    uint256 bsp = sellorders.length > 0 ? sellorders.length.sub(1) : 0;
-                    while(bsp > 0){
-                        if(sellorders[bsp.sub(1)].price <= sellorders[bsp].price) {
-                            break;   
-                        }
-                        Order memory temp = sellorders[bsp.sub(1)];
-                        sellorders[bsp.sub(1)] = sellorders[bsp];
-                        sellorders[bsp] = temp;
-                        bsp--;
-                    }
-                    orderBook[_ticker][uint(0)] = buyorders;
-                    nextOrderId++;
-                    return actuallyFilled;
-                }
+                return actuallyFilled;
             }
         }
     }
 
-    function createMarketOrder(string memory _ticker, Side _side, uint256 _orderQty) public returns(uint256 _filledQty) {
+    function createMarketOrder(string memory _ticker, Side _side, uint256 _orderQty) public tokenExist(_ticker) returns(uint256 _filledQty) {
+        require(_orderQty >= 1, "Order quantity must be at least 1.");
         uint256 actuallyFilled = 0;
         uint orderBookSide;
         if(_side == Side.SELL){
@@ -359,7 +324,7 @@ contract ImprovedDex {
         return actuallyFilled;
     }
 
-    function _popOrderBook(string memory _ticker, Side _side) public {
+    function _popOrderBook(string memory _ticker, Side _side) public onlyOwner {
         Order[] storage orders = orderBook[_ticker][uint(_side)];
         orders.pop();
     }
